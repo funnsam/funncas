@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use super::coeff::*;
 
 pub type Arguments = HashMap<String, f64>;
 
@@ -6,10 +7,16 @@ pub trait Expr {
     fn string(&self) -> String;
     fn latex(&self) -> String;
     fn eval(&self, _: &Arguments) -> f64;
-    fn d(&self, _: &String) -> Box<dyn Expr>;
+    fn d(&self, _: &str) -> Box<dyn Expr>;
+
+    fn simplify(&self) -> Box<dyn Expr>;
 
     fn clone_dyn(&self) -> Box<dyn Expr>;
-    fn get_const(&self) -> Option<f64>;
+    fn coefficient(&self) -> Coefficients;
+
+    fn get_const(&self) -> Option<f64> {
+        self.coefficient().0.get(&vec![]).copied()
+    }
 }
 
 impl Clone for Box<dyn Expr> {
@@ -42,12 +49,22 @@ impl Expr for Constant {
         self.0
     }
 
-    fn d(&self, _: &String) -> Box<dyn Expr> {
+    fn d(&self, _: &str) -> Box<dyn Expr> {
         Box::new(Constant(0.0))
+    }
+
+    fn simplify(&self) -> Box<dyn Expr> {
+        Box::new(self.clone())
     }
 
     fn clone_dyn(&self) -> Box<dyn Expr> {
         Box::new(self.clone())
+    }
+
+    fn coefficient(&self) -> Coefficients {
+        let mut coeff = HashMap::new();
+        coeff.insert(vec![], self.0);
+        Coefficients(coeff)
     }
 
     fn get_const(&self) -> Option<f64> {
@@ -71,7 +88,7 @@ impl Expr for Variable {
         a[&self.0]
     }
 
-    fn d(&self, n: &String) -> Box<dyn Expr> {
+    fn d(&self, n: &str) -> Box<dyn Expr> {
         if *n == self.0 {
             Box::new(Constant(1.0))
         } else {
@@ -79,8 +96,21 @@ impl Expr for Variable {
         }
     }
 
+    fn simplify(&self) -> Box<dyn Expr> {
+        Box::new(self.clone())
+    }
+
     fn clone_dyn(&self) -> Box<dyn Expr> {
         Box::new(self.clone())
+    }
+
+    fn coefficient(&self) -> Coefficients {
+        let mut coeff = HashMap::new();
+        coeff.insert(vec![VariableOrder {
+            variable: self.0.clone(),
+            order: RawHash(1.0)
+        }], 1.0);
+        Coefficients(coeff)
     }
 
     fn get_const(&self) -> Option<f64> { None }
@@ -107,7 +137,7 @@ impl Expr for Add {
         sum
     }
 
-    fn d(&self, n: &String) -> Box<dyn Expr> {
+    fn d(&self, n: &str) -> Box<dyn Expr> {
         let mut d = Vec::with_capacity(self.0.len());
 
         for i in self.0.iter() {
@@ -115,6 +145,29 @@ impl Expr for Add {
         }
 
         Box::new(Add(d))
+    }
+
+    fn simplify(&self) -> Box<dyn Expr> {
+        let mut simplified = Vec::with_capacity(self.0.len());
+        let mut is_const = true;
+
+        for i in self.0.iter() {
+            let i = i.simplify();
+            is_const &= i.get_const().is_some();
+            simplified.push(i);
+        }
+
+        if is_const {
+            Box::new(Constant(Self(simplified).eval(unsafe {
+                core::mem::transmute(core::ptr::null::<u8>()) // casual unsafe action going on here
+            })))
+        } else {
+            Box::new(Self(simplified))
+        }
+    }
+
+    fn coefficient(&self) -> Coefficients {
+        todo!()
     }
 
     fn clone_dyn(&self) -> Box<dyn Expr> {
@@ -145,7 +198,7 @@ impl Expr for Mul {
         sum
     }
 
-    fn d(&self, n: &String) -> Box<dyn Expr> {
+    fn d(&self, n: &str) -> Box<dyn Expr> {
         let mut terms: Vec<Box<dyn Expr>> = Vec::with_capacity(self.0.len());
 
         for i in 0..self.0.len() {
@@ -155,6 +208,30 @@ impl Expr for Mul {
         }
 
         Box::new(Add(terms))
+    }
+
+    // totally not copy-pasted
+    fn simplify(&self) -> Box<dyn Expr> {
+        let mut simplified = Vec::with_capacity(self.0.len());
+        let mut is_const = true;
+
+        for i in self.0.iter() {
+            let i = i.simplify();
+            is_const &= i.get_const().is_some();
+            simplified.push(i);
+        }
+
+        if is_const {
+            Box::new(Constant(Self(simplified).eval(unsafe {
+                core::mem::transmute(core::ptr::null::<u8>()) // casual unsafe action going on here
+            })))
+        } else {
+            Box::new(Self(simplified))
+        }
+    }
+
+    fn coefficient(&self) -> Coefficients {
+        todo!()
     }
 
     fn clone_dyn(&self) -> Box<dyn Expr> {
@@ -180,12 +257,33 @@ impl Expr for Pow {
         self.0.eval(a).powf(self.1.eval(a))
     }
 
-    fn d(&self, n: &String) -> Box<dyn Expr> {
+    fn d(&self, n: &str) -> Box<dyn Expr> {
         if let Some(exp) = self.1.get_const() {
-            Box::new(Mul(vec![self.1.clone(), Box::new(Pow(self.0.clone(), Box::new(Constant(exp-1.0)))), self.0.d(n)]))
+            Box::new(Mul(vec![
+                self.1.clone(),
+                Box::new(Pow(self.0.clone(), Box::new(Constant(exp-1.0)))),
+                self.0.d(n)
+            ]))
         } else {
             todo!()
         }
+    }
+
+    fn simplify(&self) -> Box<dyn Expr> {
+        let lhs = self.0.simplify();
+        let rhs = self.1.simplify();
+
+        if lhs.get_const().is_some() && rhs.get_const().is_some() {
+            Box::new(Constant(Self(lhs, rhs).eval(unsafe {
+                core::mem::transmute(core::ptr::null::<u8>()) // casual unsafe action going on here
+            })))
+        } else {
+            Box::new(self.clone())
+        }
+    }
+
+    fn coefficient(&self) -> Coefficients {
+        todo!()
     }
 
     fn clone_dyn(&self) -> Box<dyn Expr> {

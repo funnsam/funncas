@@ -30,7 +30,7 @@ pub fn parse(input: &str) -> Box<dyn ops::Expr> {
                 let bas = v.pop().unwrap();
                 v.push(Box::new(ops::Pow(bas, exp)));
             },
-            _ => todo!(),
+            _ => v.push(Box::new(ops::Variable(i.to_string()))),
         }
     }
 
